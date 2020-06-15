@@ -24,11 +24,12 @@ import (
 )
 
 const (
-	MigStrategyDisabled             = "disabled"
-	MigStrategyNone                 = "none"
-	MigStrategySingle               = "single"
-	MigStrategyMixed                = "mixed"
-	MigStrategyMixedMemoryQualified = "mixed-memory-qualified"
+	MigStrategyDisabled                   = "disabled"
+	MigStrategyNone                       = "none"
+	MigStrategySingle                     = "single"
+	MigStrategyMixed                      = "mixed"
+	MigStrategyMixedMemoryQualified       = "mixed-memory-qualified"
+	MigStrategyMixedFractionallyQualified = "mixed-fractionally-qualified"
 )
 
 type MigStrategyResourceSet map[string]struct{}
@@ -50,6 +51,8 @@ func NewMigStrategy(strategy string) (MigStrategy, error) {
 		return &migStrategyMixed{}, nil
 	case MigStrategyMixedMemoryQualified:
 		return &migStrategyMixedMemoryQualified{}, nil
+	case MigStrategyMixedFractionallyQualified:
+		return &migStrategyMixedFractionallyQualified{}, nil
 	}
 	return nil, fmt.Errorf("Unknown strategy: %v", strategy)
 }
@@ -59,6 +62,7 @@ type migStrategyNone struct{}
 type migStrategySingle struct{}
 type migStrategyMixed struct{}
 type migStrategyMixedMemoryQualified struct{}
+type migStrategyMixedFractionallyQualified struct{}
 
 // getAllMigDevices() across all full GPUs
 func getAllMigDevices() []*nvml.Device {
@@ -223,5 +227,48 @@ func (s *migStrategyMixedMemoryQualified) getResourceName(mig *nvml.Device) stri
 }
 
 func (s *migStrategyMixedMemoryQualified) MatchesResource(mig *nvml.Device, resource string) bool {
+	return s.getResourceName(mig) == resource
+}
+
+// migStrategyMixedFractionallyQualified
+func (s *migStrategyMixedFractionallyQualified) GetPlugins() []*NvidiaDevicePlugin {
+	resources := make(MigStrategyResourceSet)
+	for _, mig := range getAllMigDevices() {
+		r := s.getResourceName(mig)
+		resources[r] = struct{}{}
+	}
+	return migStrategyMixedGetPlugins(s, resources)
+}
+
+func (s *migStrategyMixedFractionallyQualified) getResourceName(mig *nvml.Device) string {
+	parent, err := mig.GetMigParentDeviceLite()
+	check(err)
+
+	maxMigs, err := parent.GetMaxMigDeviceCount()
+	check(err)
+
+	attr, err := mig.GetAttributes()
+	check(err)
+
+	// The following algorithm is customized knowing we have 7 slices on
+	// Ampere. It interprets a MigHalf as 3, MigQuarter as 2 and MigEighth
+	// as 1. On future GPUs we should have 8 maximum MIG devices, not 7, so
+	// this will need to change.
+	//
+	// TODO: generalize this for future architectures 8 or more slices.
+	if int(attr.GpuInstanceSliceCount) == ((maxMigs+1)/2)-1 {
+		return "mig-half"
+	}
+	if int(attr.GpuInstanceSliceCount) == ((maxMigs + 1) / 4) {
+		return "mig-quarter"
+	}
+	if int(attr.GpuInstanceSliceCount) == ((maxMigs + 1) / 8) {
+		return "mig-eighth"
+	}
+
+	panic("Unsupported MIG instance size")
+}
+
+func (s *migStrategyMixedFractionallyQualified) MatchesResource(mig *nvml.Device, resource string) bool {
 	return s.getResourceName(mig) == resource
 }
