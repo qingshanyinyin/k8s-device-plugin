@@ -25,6 +25,7 @@ import (
 
 const (
 	MigStrategyDisabled = "disabled"
+	MigStrategyNone     = "none"
 )
 
 type MigStrategy interface {
@@ -36,11 +37,14 @@ func NewMigStrategy(strategy string) (MigStrategy, error) {
 	switch strategy {
 	case MigStrategyDisabled:
 		return &migStrategyDisabled{}, nil
+	case MigStrategyNone:
+		return &migStrategyNone{}, nil
 	}
 	return nil, fmt.Errorf("Unknown strategy: %v", strategy)
 }
 
 type migStrategyDisabled struct{}
+type migStrategyNone struct{}
 
 // migStrategyDisabled
 func (s *migStrategyDisabled) GetPlugins() []*NvidiaDevicePlugin {
@@ -54,6 +58,22 @@ func (s *migStrategyDisabled) GetPlugins() []*NvidiaDevicePlugin {
 }
 
 func (s *migStrategyDisabled) MatchesResource(mig *nvml.Device, resource string) bool {
+	panic("Should never be called")
+	return false
+}
+
+// migStrategyNone
+func (s *migStrategyNone) GetPlugins() []*NvidiaDevicePlugin {
+	return []*NvidiaDevicePlugin{
+		NewNvidiaDevicePlugin(
+			"nvidia.com/gpu",
+			NewGpuDeviceManager(true), // Skip device if MIG enabled
+			"NVIDIA_VISIBLE_DEVICES",
+			pluginapi.DevicePluginPath+"nvidia-gpu.sock"),
+	}
+}
+
+func (s *migStrategyNone) MatchesResource(mig *nvml.Device, resource string) bool {
 	panic("Should never be called")
 	return false
 }
