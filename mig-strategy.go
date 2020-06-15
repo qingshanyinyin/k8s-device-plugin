@@ -24,10 +24,11 @@ import (
 )
 
 const (
-	MigStrategyDisabled = "disabled"
-	MigStrategyNone     = "none"
-	MigStrategySingle   = "single"
-	MigStrategyMixed    = "mixed"
+	MigStrategyDisabled             = "disabled"
+	MigStrategyNone                 = "none"
+	MigStrategySingle               = "single"
+	MigStrategyMixed                = "mixed"
+	MigStrategyMixedMemoryQualified = "mixed-memory-qualified"
 )
 
 type MigStrategyResourceSet map[string]struct{}
@@ -47,6 +48,8 @@ func NewMigStrategy(strategy string) (MigStrategy, error) {
 		return &migStrategySingle{}, nil
 	case MigStrategyMixed:
 		return &migStrategyMixed{}, nil
+	case MigStrategyMixedMemoryQualified:
+		return &migStrategyMixedMemoryQualified{}, nil
 	}
 	return nil, fmt.Errorf("Unknown strategy: %v", strategy)
 }
@@ -55,6 +58,7 @@ type migStrategyDisabled struct{}
 type migStrategyNone struct{}
 type migStrategySingle struct{}
 type migStrategyMixed struct{}
+type migStrategyMixedMemoryQualified struct{}
 
 // getAllMigDevices() across all full GPUs
 func getAllMigDevices() []*nvml.Device {
@@ -151,14 +155,8 @@ func (s *migStrategySingle) MatchesResource(mig *nvml.Device, resource string) b
 	return true
 }
 
-// migStrategyMixed
-func (s *migStrategyMixed) GetPlugins() []*NvidiaDevicePlugin {
-	resources := make(MigStrategyResourceSet)
-	for _, mig := range getAllMigDevices() {
-		r := s.getResourceName(mig)
-		resources[r] = struct{}{}
-	}
-
+// migStrategyMixedGetPlugins is shared by each of the mixed strategies below
+func migStrategyMixedGetPlugins(s MigStrategy, resources MigStrategyResourceSet) []*NvidiaDevicePlugin {
 	plugins := []*NvidiaDevicePlugin{
 		NewNvidiaDevicePlugin(
 			"nvidia.com/gpu",
@@ -179,6 +177,16 @@ func (s *migStrategyMixed) GetPlugins() []*NvidiaDevicePlugin {
 	return plugins
 }
 
+// migStrategyMixed
+func (s *migStrategyMixed) GetPlugins() []*NvidiaDevicePlugin {
+	resources := make(MigStrategyResourceSet)
+	for _, mig := range getAllMigDevices() {
+		r := s.getResourceName(mig)
+		resources[r] = struct{}{}
+	}
+	return migStrategyMixedGetPlugins(s, resources)
+}
+
 func (s *migStrategyMixed) getResourceName(mig *nvml.Device) string {
 	attr, err := mig.GetAttributes()
 	check(err)
@@ -191,5 +199,29 @@ func (s *migStrategyMixed) getResourceName(mig *nvml.Device) string {
 }
 
 func (s *migStrategyMixed) MatchesResource(mig *nvml.Device, resource string) bool {
+	return s.getResourceName(mig) == resource
+}
+
+// migStrategyMixedMemoryQualified
+func (s *migStrategyMixedMemoryQualified) GetPlugins() []*NvidiaDevicePlugin {
+	resources := make(MigStrategyResourceSet)
+	for _, mig := range getAllMigDevices() {
+		r := s.getResourceName(mig)
+		resources[r] = struct{}{}
+	}
+	return migStrategyMixedGetPlugins(s, resources)
+}
+
+func (s *migStrategyMixedMemoryQualified) getResourceName(mig *nvml.Device) string {
+	attr, err := mig.GetAttributes()
+	check(err)
+
+	gb := ((attr.MemorySizeMB + 1000 - 1) / 1000)
+	r := fmt.Sprintf("mig-%dgb", gb)
+
+	return r
+}
+
+func (s *migStrategyMixedMemoryQualified) MatchesResource(mig *nvml.Device, resource string) bool {
 	return s.getResourceName(mig) == resource
 }
